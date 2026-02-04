@@ -2,6 +2,9 @@
 
 A powerful web-based tool for PCBA manufacturing that helps you generate accurate Component Placement Lists (CPL) / Centroid files from your Gerber data.
 
+![Gerber to CPL Screenshot](docs/images/screenshot.png)
+
+
 ## Features
 
 - **Interactive Gerber Viewer**: Upload your Gerber ZIP file and visualize all PCB layers (Copper, Silkscreen, Solder Mask, Paste).
