@@ -19,6 +19,7 @@ The application state is primarily centralized in `src/App.jsx` and passed down 
 - `componentLocations`: Map of designators to detected locations (from OCR).
 - `currentIdx`: Index of the currently selected component in the BOM.
 - `displayUnits`: current display unit ('mm' or 'in').
+- `placingRotation`: Current rotation angle (0, 90, 180, 270) for the pending placement.
 
 ### Folder Structure
 - `src/components`: UI components.
@@ -44,7 +45,14 @@ The application state is primarily centralized in `src/App.jsx` and passed down 
 ### 3. Coordinate Systems & Units
 - The backend/logic mostly treats coordinates in the native unit of the Gerber file (often inches).
 - `displayUnits` controls the *presentation* to the user.
+- **Coordinate Mapping**: The `gerberToPixel` helper in `GerberViewer.jsx` handles the translation from native units to board pixels, accounting for scaling (100px per native unit) and the Gerber/SVG Y-axis flip $+ `viewBox` offsets.
 - **Important**: When exporting or displaying, always check `displayUnits` vs the `boardInfo.units` to perform necessary conversions.
+
+### 4. Rotation Logic
+- Rotation is stored in 90° increments (0, 90, 180, 270).
+- Users can rotate using the **'R'** key or the UI button.
+- Rotation is visualized in real-time by an amber directional ghost indicator.
+- Static markers on the board are rendered as green tick-marks with white pips (indicating Pin 1) to show the orientation of placed components.
 
 ## Common Tasks for Agents
 - **Adding new Gerber layer support**: Check `src/lib/gerber-logic.js` layer inference logic.
@@ -61,18 +69,21 @@ Since this project primarily utilizes manual verification, follow these steps to
 
 ### 2. Manual Test Script
 1.  **Load Reference Files**:
-    - Use the provided `uOC1.1 Gerber.zip` and `uO_C BOM 1.1 - BOM.csv` in the root directory.
+    - Use the **"Load Test Files"** button (violet button in header) to instantly load the provided `uOC1.1 Gerber.zip` and `uO_C BOM 1.1 - BOM.csv`.
 2.  **Verify Gerber Parsing**:
-    - Upload the zip.
     - Confirm visually that Top Copper, Bottom Copper, and Silkscreen layers appear.
-    - Check that the "Layer List" on the right (or flipped view) shows checkboxes for toggling visibility.
+    - Check that the "Layer List" on the left shows checkboxes for toggling visibility.
 3.  **Verify BOM Import**:
     - Upload the CSV.
     - Confirm the sidebar populates with a list of components (e.g., C1, R1, U1).
-4.  **Test Placement (Manual)**:
+4.  **Test Placement & Rotation**:
     - Click "R1" in the sidebar.
+    - Hover over the board.
+    - **Expected**: An amber ghost indicator follows the mouse, aligned with the cursor center.
+    - Press **'R'**.
+    - **Expected**: The ghost indicator rotates 90°.
     - Click a location on the board.
-    - **Expected**: A marker appears, and the selection auto-advances to the next component.
+    - **Expected**: A static green directional marker appears, and the selection auto-advances.
 5.  **Test Unit Conversion**:
     - Toggle "MM" / "IN" at the top right.
     - **Expected**: The coordinates in the sidebar and placement controls update values to reflect the chosen unit.

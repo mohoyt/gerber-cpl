@@ -105,6 +105,9 @@ const BOMSidebar = ({ bom, currentIdx, onBomUpload, onSelectComponent, onExport,
                             {item.placement && (
                                 <span className="text-[10px] font-mono text-blue-400 mt-1">
                                     X: {formatCoord(item.placement.x)} Y: {formatCoord(item.placement.y)} {displayUnits}
+                                    {item.placement.rotation !== undefined && item.placement.rotation !== 0 && (
+                                        <span className="text-amber-400"> · {item.placement.rotation}°</span>
+                                    )}
                                 </span>
                             )}
                         </div>

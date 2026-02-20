@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import GerberViewer from './components/GerberViewer';
 import BOMSidebar from './components/BOMSidebar';
 import PlacementControls from './components/PlacementControls';
 import { processGerberZip, runOCRProcess } from './lib/gerber-logic';
 import { exportCPL } from './lib/exporter';
-import { Upload, UploadCloud, Cpu, Info, FileCode } from 'lucide-react';
+import Papa from 'papaparse';
+import { Upload, UploadCloud, Cpu, Info, FileCode, FlaskConical } from 'lucide-react';
 
 function App() {
   const [layers, setLayers] = useState([]);
@@ -16,6 +17,7 @@ function App() {
   const [loadingMessage, setLoadingMessage] = useState('Processing...');
   const [componentLocations, setComponentLocations] = useState({});
   const [displayUnits, setDisplayUnits] = useState('mm'); // 'mm' or 'in'
+  const [placingRotation, setPlacingRotation] = useState(0);
 
   const handleGerberUpload = async (e) => {
     const file = e.target.files[0];
@@ -37,6 +39,49 @@ function App() {
     } catch (error) {
       console.error(error);
       alert("Error processing Gerber file");
+    } finally {
+      setIsLoading(false);
+      setLoadingMessage('');
+    }
+  };
+
+  const handleLoadTestFiles = async () => {
+    setIsLoading(true);
+    setLoadingMessage('Loading test files...');
+    try {
+      // Fetch Gerber ZIP
+      const gerberRes = await fetch('/test/test-gerber.zip');
+      if (!gerberRes.ok) throw new Error('Could not fetch test Gerber file');
+      const gerberBlob = await gerberRes.blob();
+      const gerberFile = new File([gerberBlob], 'test-gerber.zip', { type: 'application/zip' });
+
+      const result = await processGerberZip(gerberFile, (msg) => setLoadingMessage(msg));
+      setLayers(result.layers);
+      setBoardInfo(result.boardInfo);
+      setComponentLocations({});
+
+      // Fetch BOM CSV
+      const bomRes = await fetch('/test/test-bom.csv');
+      if (!bomRes.ok) throw new Error('Could not fetch test BOM file');
+      const bomText = await bomRes.text();
+      const parsed = Papa.parse(bomText, {
+        header: true,
+        skipEmptyLines: true,
+        transformHeader: (h) => h.toLowerCase().trim(),
+      });
+      const normalizedBom = parsed.data.map(item => ({
+        comment: item.comment || '',
+        designator: (item.designator || '').trim(),
+        footprint: item.footprint || '',
+        partNumber: item['part number'] || item.partnumber || '',
+        placement: null,
+      }));
+      setBom(normalizedBom);
+      setCurrentIdx(-1);
+      setPlacingRotation(0);
+    } catch (err) {
+      console.error(err);
+      alert('Error loading test files: ' + err.message);
     } finally {
       setIsLoading(false);
       setLoadingMessage('');
@@ -76,8 +121,11 @@ function App() {
   const handleSelection = (idx) => {
     setCurrentIdx(idx);
 
-    // Auto-flip if component is only found on the other side
+    // Seed rotation from existing placement so editing starts at saved angle
     const component = bom[idx];
+    setPlacingRotation(component?.placement?.rotation ?? 0);
+
+    // Auto-flip if component is only found on the other side
     if (component && componentLocations[component.designator]) {
       const loc = componentLocations[component.designator];
       if (loc.layerType === 'Bottom Silkscreen' && !isFlipped) {
@@ -88,6 +136,42 @@ function App() {
     }
   };
 
+  // Rotate by 90° — works both pre- and post-placement
+  const handleRotate = useCallback(() => {
+    setPlacingRotation(prev => {
+      const next = (prev + 90) % 360;
+      // If the component is already placed, keep the stored rotation in sync
+      setBom(currentBom => {
+        if (currentIdx === -1) return currentBom;
+        const updated = [...currentBom];
+        if (updated[currentIdx]?.placement) {
+          updated[currentIdx] = {
+            ...updated[currentIdx],
+            placement: { ...updated[currentIdx].placement, rotation: next }
+          };
+        }
+        return updated;
+      });
+      return next;
+    });
+  }, [currentIdx]);
+
+  // Keyboard shortcut: R to rotate
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      // Don't fire when typing in inputs/textareas
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.key === 'r' || e.key === 'R') {
+        if (currentIdx !== -1) {
+          e.preventDefault();
+          handleRotate();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [currentIdx, handleRotate]);
+
   const handlePlacementClick = (coords) => {
     if (currentIdx === -1) return;
 
@@ -96,7 +180,7 @@ function App() {
       ...newBom[currentIdx].placement,
       x: coords.x,
       y: coords.y,
-      rotation: newBom[currentIdx].placement?.rotation || 0,
+      rotation: placingRotation,
       layer: isFlipped ? 'Bottom' : 'Top'
     };
     setBom(newBom);
@@ -105,11 +189,13 @@ function App() {
     const nextIdx = newBom.findIndex((item, i) => i > currentIdx && !item.placement);
     if (nextIdx !== -1) {
       setCurrentIdx(nextIdx);
+      setPlacingRotation(newBom[nextIdx]?.placement?.rotation ?? 0);
     } else {
       // If no next unplaced item, find any unplaced
       const firstUnplaced = newBom.findIndex(item => !item.placement);
       if (firstUnplaced !== -1) {
         setCurrentIdx(firstUnplaced);
+        setPlacingRotation(newBom[firstUnplaced]?.placement?.rotation ?? 0);
       }
     }
   };
@@ -128,10 +214,12 @@ function App() {
     const nextIdx = bom.findIndex((item, i) => i > currentIdx && !item.placement);
     if (nextIdx !== -1) {
       setCurrentIdx(nextIdx);
+      setPlacingRotation(bom[nextIdx]?.placement?.rotation ?? 0);
     } else {
       // If no next unplaced item, find any unplaced
       const firstUnplaced = bom.findIndex(item => !item.placement);
       setCurrentIdx(firstUnplaced);
+      setPlacingRotation(firstUnplaced !== -1 ? (bom[firstUnplaced]?.placement?.rotation ?? 0) : 0);
     }
   };
 
@@ -185,6 +273,17 @@ function App() {
               </button>
             </div>
 
+            {import.meta.env.DEV && (
+              <button
+                onClick={handleLoadTestFiles}
+                className="flex items-center gap-2 px-4 py-2 bg-violet-800/70 hover:bg-violet-700 border border-violet-600 rounded-lg text-sm font-semibold text-violet-200 transition-all active:scale-95"
+                title="Load test Gerber + BOM (dev only)"
+              >
+                <FlaskConical size={16} />
+                Load Test Files
+              </button>
+            )}
+
             {layers.length > 0 && (
               <button
                 onClick={() => setIsFlipped(!isFlipped)}
@@ -233,11 +332,15 @@ function App() {
                 componentLocation={currentIdx !== -1 && bom[currentIdx] ? componentLocations[bom[currentIdx].designator] : null}
                 displayUnits={displayUnits}
                 nativeUnits={boardInfo?.units || 'in'}
+                placingRotation={placingRotation}
+                placements={bom.filter(c => c.placement).map(c => ({ ...c.placement, designator: c.designator }))}
               />
 
               {currentIdx !== -1 && (
                 <PlacementControls
                   currentComponent={bom[currentIdx]}
+                  placingRotation={placingRotation}
+                  onRotate={handleRotate}
                   onUpdatePlacement={updatePlacement}
                   onConfirm={confirmPlacement}
                   displayUnits={displayUnits}

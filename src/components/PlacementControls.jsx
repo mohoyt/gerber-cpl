@@ -1,11 +1,10 @@
 import React from 'react';
-import { RotateCw, Layers, Check, ChevronRight } from 'lucide-react';
+import { RotateCw, Layers, Check } from 'lucide-react';
 
-const PlacementControls = ({ currentComponent, onUpdatePlacement, onConfirm, displayUnits = 'mm', nativeUnits = 'in' }) => {
+const PlacementControls = ({ currentComponent, placingRotation = 0, onRotate, onUpdatePlacement, onConfirm, displayUnits = 'mm', nativeUnits = 'in' }) => {
     if (!currentComponent) return null;
 
     const { placement, designator, comment } = currentComponent;
-    const rotation = placement?.rotation || 0;
     const layer = placement?.layer || 'Top';
 
     const formatCoord = (val) => {
@@ -19,11 +18,6 @@ const PlacementControls = ({ currentComponent, onUpdatePlacement, onConfirm, dis
         }
 
         return displayVal.toFixed(displayUnits === 'mm' ? 2 : 3);
-    };
-
-    const rotate = () => {
-        const nextRotation = (rotation + 90) % 360;
-        onUpdatePlacement({ rotation: nextRotation });
     };
 
     const toggleLayer = () => {
@@ -45,17 +39,22 @@ const PlacementControls = ({ currentComponent, onUpdatePlacement, onConfirm, dis
                 </div>
 
                 <div className="flex items-center gap-4">
+                    {/* Rotate Button */}
                     <div className="flex flex-col items-center gap-1">
                         <button
-                            onClick={rotate}
+                            onClick={onRotate}
                             className="p-3 bg-slate-700 hover:bg-slate-600 rounded-xl transition-all active:scale-90"
-                            title="Rotate 90°"
+                            title="Rotate 90° (R)"
                         >
                             <RotateCw size={24} className="text-slate-200" />
                         </button>
-                        <span className="text-[10px] font-mono text-slate-500">{rotation}°</span>
+                        <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-mono text-slate-500">{placingRotation}°</span>
+                            <kbd className="text-[9px] font-bold text-slate-600 bg-slate-700/60 border border-slate-600 rounded px-1 py-0.5 leading-none">R</kbd>
+                        </div>
                     </div>
 
+                    {/* Layer Toggle */}
                     <div className="flex flex-col items-center gap-1">
                         <button
                             onClick={toggleLayer}
@@ -82,4 +81,3 @@ const PlacementControls = ({ currentComponent, onUpdatePlacement, onConfirm, dis
 };
 
 export default PlacementControls;
-

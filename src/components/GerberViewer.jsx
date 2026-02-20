@@ -1,30 +1,31 @@
 import React, { useState } from 'react';
 import { TransformWrapper, TransformComponent, useTransformEffect } from 'react-zoom-pan-pinch';
-import { Maximize, Minimize, RotateCcw, FlipHorizontal } from 'lucide-react';
+import { Maximize, Minimize, RotateCcw } from 'lucide-react';
+
+// Convert native-unit Gerber coordinates to pixel offsets within the board div.
+// boardInfo.viewBox = [minX, minY, width, height] in plotter units (1/1000 native units)
+// boardInfo.width/height = viewBox dimensions / 1000 (native units)
+// Board div size in px = boardInfo.width * 100 = viewBox[2] / 10
+// → pixel = (plotter-unit - minX) / 10
+// Gerber Y is flipped relative to SVG Y.
+const gerberToPixel = (x, y, viewBox) => {
+    const [minX, minY, , height] = viewBox;
+    const yTranslate = height + 2 * minY;
+    const px = (x * 1000 - minX) / 10;
+    const py = (yTranslate - y * 1000 - minY) / 10;
+    return { px, py };
+};
 
 const ZoomManager = ({ componentLocation, boardInfo }) => {
     useTransformEffect(({ setTransform }) => {
         if (componentLocation && boardInfo) {
-            const [, minY, , height] = boardInfo.viewBox;
-            const yTranslate = height + 2 * minY;
-
-            // Convert Gerber coordinates back to SVG coordinates for zoomToElement or center
-            const svgX = componentLocation.x * 1000;
-            const svgY = yTranslate - (componentLocation.y * 1000);
-
-            // Calculate scale based on board size (aim for ~100px zoom window)
+            const { px, py } = gerberToPixel(componentLocation.x, componentLocation.y, boardInfo.viewBox);
             const zoomScale = 10;
-
-            // Center the view on the component
-            // Note: TransformWrapper's internal state needs to be updated. 
-            // We use setTransform for direct control.
             const container = document.getElementById('gerber-container');
             if (container) {
                 const rect = container.getBoundingClientRect();
-                const targetX = (rect.width / 2) - (svgX * zoomScale);
-                const targetY = (rect.height / 2) - (svgY * zoomScale);
-
-                // Use smooth transition
+                const targetX = (rect.width / 2) - (px * zoomScale);
+                const targetY = (rect.height / 2) - (py * zoomScale);
                 setTransform(targetX, targetY, zoomScale, 400, "easeOut");
             }
         }
@@ -32,73 +33,69 @@ const ZoomManager = ({ componentLocation, boardInfo }) => {
     return null;
 };
 
-const GerberViewer = ({ layers, boardInfo, isFlipped, onPlacementClick, onToggleLayer, selectedComponent, componentLocation, displayUnits = 'mm', nativeUnits = 'in' }) => {
+const GerberViewer = ({
+    layers,
+    boardInfo,
+    isFlipped,
+    onPlacementClick,
+    onToggleLayer,
+    selectedComponent,
+    componentLocation,
+    displayUnits = 'mm',
+    nativeUnits = 'in',
+    placingRotation = 0,
+    placements = [],   // All placed components: [{ x, y, rotation, designator }]
+}) => {
     const [cursorCoords, setCursorCoords] = useState(null);
 
-    // Combine visible layers into one view
     const visibleLayers = layers.filter(l => l.visible);
 
     const getGerberCoords = (e, svgElement) => {
         if (!boardInfo) return null;
-
-        // Use SVG coordinates to get exact Gerber units
         const point = svgElement.createSVGPoint();
         point.x = e.clientX;
         point.y = e.clientY;
-
-        // Convert screen coordinates to SVG coordinates
         const svgPoint = point.matrixTransform(svgElement.getScreenCTM().inverse());
-
-        // Coordinate transformation matches gerber-to-svg's render.js:
         const [, minY, , height] = boardInfo.viewBox;
         const yTranslate = height + 2 * minY;
-
-        let gerberX = svgPoint.x;
-        let gerberY = yTranslate - svgPoint.y;
-
-        // Convert mil (or 1/1000 units) back to base units (inch/mm)
-        // Note: Plotter usually emits in 1/1000 of the units specified
-        const finalX = gerberX / 1000;
-        const finalY = gerberY / 1000;
-
-        return { x: finalX, y: finalY };
+        return {
+            x: svgPoint.x / 1000,
+            y: (yTranslate - svgPoint.y) / 1000,
+        };
     };
 
     const handleMouseMove = (e) => {
         if (!boardInfo) return;
         const svgElement = e.currentTarget.querySelector('svg');
         if (!svgElement) return;
-
         const coords = getGerberCoords(e, svgElement);
         if (coords) setCursorCoords(coords);
     };
 
     const handleBoardClick = (e) => {
         if (!onPlacementClick || !boardInfo) return;
-
         const svgElement = e.currentTarget.querySelector('svg');
         if (!svgElement) return;
-
         const coords = getGerberCoords(e, svgElement);
         if (coords) onPlacementClick(coords);
     };
 
     const formatCoord = (val) => {
         if (typeof val !== 'number') return '0.00';
-
         let displayVal = val;
-        if (nativeUnits === 'in' && displayUnits === 'mm') {
-            displayVal = val * 25.4;
-        } else if (nativeUnits === 'mm' && displayUnits === 'in') {
-            displayVal = val / 25.4;
-        }
-
+        if (nativeUnits === 'in' && displayUnits === 'mm') displayVal = val * 25.4;
+        else if (nativeUnits === 'mm' && displayUnits === 'in') displayVal = val / 25.4;
         return displayVal.toFixed(displayUnits === 'mm' ? 2 : 3);
     };
 
-
-    const boardWidth = boardInfo ? boardInfo.width * 100 : 600; // Scaled for display
+    const boardWidth = boardInfo ? boardInfo.width * 100 : 600;
     const boardHeight = boardInfo ? boardInfo.height * 100 : 400;
+
+    // Sizes in pixels for overlay elements
+    const GHOST_W = 14;
+    const GHOST_H = 22;
+    const TICK_W = 4;
+    const TICK_H = 16;
 
     return (
         <div className="relative w-full h-full bg-slate-900 border border-slate-700 shadow-2xl overflow-hidden rounded-xl flex">
@@ -131,15 +128,10 @@ const GerberViewer = ({ layers, boardInfo, isFlipped, onPlacementClick, onToggle
 
             {/* Viewer Content */}
             <div className="flex-1 relative overflow-hidden" id="gerber-container">
-                <TransformWrapper
-                    initialScale={1}
-                    minScale={0.1}
-                    maxScale={30}
-                    centerOnInit={true}
-                >
+                <TransformWrapper initialScale={1} minScale={0.1} maxScale={30} centerOnInit={true}>
                     {({ zoomIn, zoomOut, resetTransform }) => (
                         <>
-                            <ZoomManager componentLocation={componentLocation} boardInfo={boardInfo} isFlipped={isFlipped} />
+                            <ZoomManager componentLocation={componentLocation} boardInfo={boardInfo} />
                             <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
                                 <button onClick={() => zoomIn()} className="p-2 bg-slate-800/80 backdrop-blur-md rounded-lg border border-slate-600 hover:bg-slate-700 transition-colors text-slate-200">
                                     <Maximize size={20} />
@@ -161,7 +153,6 @@ const GerberViewer = ({ layers, boardInfo, isFlipped, onPlacementClick, onToggle
                                     style={{ cursor: onPlacementClick ? 'crosshair' : 'default' }}
                                 >
                                     {visibleLayers.length === 0 ? (
-
                                         <div className="text-slate-500 font-medium italic">No visible layers</div>
                                     ) : (
                                         visibleLayers.map((layer, idx) => (
@@ -179,39 +170,156 @@ const GerberViewer = ({ layers, boardInfo, isFlipped, onPlacementClick, onToggle
                                         ))
                                     )}
 
-                                    {/* Component Highlight */}
-                                    {componentLocation && boardInfo && (
-                                        <div
-                                            className="absolute pointer-events-none z-[200]"
-                                            style={{
-                                                left: componentLocation.x * 1000 - 10,
-                                                top: (boardInfo.viewBox[3] + 2 * boardInfo.viewBox[1]) - (componentLocation.y * 1000) - 10,
-                                                width: 20,
-                                                height: 20,
-                                                border: '2px solid #3b82f6',
-                                                borderRadius: '50%',
-                                                boxShadow: '0 0 10px #3b82f6, inset 0 0 10px #3b82f6',
-                                                animation: 'pulse 1.5s infinite'
-                                            }}
-                                        />
-                                    )}
+                                    {/* Static markers for ALL placed components (green tick lines) */}
+                                    {boardInfo && placements.map((p) => {
+                                        const isSelected = selectedComponent?.designator === p.designator;
+                                        if (isSelected) return null; // selected component gets its own marker below
+                                        const { px, py } = gerberToPixel(p.x, p.y, boardInfo.viewBox);
+                                        return (
+                                            <div
+                                                key={p.designator}
+                                                className="absolute pointer-events-none z-[200]"
+                                                style={{
+                                                    left: px - TICK_W / 2,
+                                                    top: py - TICK_H / 2,
+                                                    width: TICK_W,
+                                                    height: TICK_H,
+                                                    transform: `rotate(${p.rotation || 0}deg)`,
+                                                    transformOrigin: '50% 50%',
+                                                }}
+                                            >
+                                                {/* Tick body */}
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    left: 0, right: 0, top: 0, bottom: 0,
+                                                    backgroundColor: '#10b981',
+                                                    borderRadius: 1,
+                                                    opacity: 0.85,
+                                                    boxShadow: '0 0 4px #10b981',
+                                                }} />
+                                                {/* Pin-1 pip at top */}
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    width: 4, height: 4,
+                                                    borderRadius: '50%',
+                                                    backgroundColor: '#fff',
+                                                    top: 1,
+                                                    left: '50%',
+                                                    transform: 'translateX(-50%)',
+                                                }} />
+                                            </div>
+                                        );
+                                    })}
 
-                                    {/* Current Placement Preview */}
-                                    {selectedComponent?.placement && boardInfo && (
-                                        <div
-                                            className="absolute pointer-events-none z-[210] flex items-center justify-center"
-                                            style={{
-                                                left: selectedComponent.placement.x * 1000 - 5,
-                                                top: (boardInfo.viewBox[3] + 2 * boardInfo.viewBox[1]) - (selectedComponent.placement.y * 1000) - 5,
-                                                width: 10,
-                                                height: 10,
-                                                backgroundColor: '#10b981',
-                                                borderRadius: '2px',
-                                                boxShadow: '0 0 10px #10b981',
-                                                transform: `rotate(${selectedComponent.placement.rotation || 0}deg)`
-                                            }}
-                                        />
-                                    )}
+                                    {/* OCR-found location highlight (pulsing blue ring) */}
+                                    {componentLocation && boardInfo && (() => {
+                                        const { px, py } = gerberToPixel(componentLocation.x, componentLocation.y, boardInfo.viewBox);
+                                        return (
+                                            <div
+                                                className="absolute pointer-events-none z-[205]"
+                                                style={{
+                                                    left: px - 10,
+                                                    top: py - 10,
+                                                    width: 20,
+                                                    height: 20,
+                                                    border: '2px solid #3b82f6',
+                                                    borderRadius: '50%',
+                                                    boxShadow: '0 0 10px #3b82f6, inset 0 0 10px #3b82f6',
+                                                    animation: 'pulse 1.5s infinite',
+                                                }}
+                                            />
+                                        );
+                                    })()}
+
+                                    {/* Selected component placed-marker (brighter green tick) */}
+                                    {selectedComponent?.placement && boardInfo && (() => {
+                                        const { px, py } = gerberToPixel(
+                                            selectedComponent.placement.x,
+                                            selectedComponent.placement.y,
+                                            boardInfo.viewBox
+                                        );
+                                        const rot = selectedComponent.placement.rotation || 0;
+                                        return (
+                                            <div
+                                                className="absolute pointer-events-none z-[210]"
+                                                style={{
+                                                    left: px - TICK_W / 2,
+                                                    top: py - TICK_H / 2,
+                                                    width: TICK_W,
+                                                    height: TICK_H,
+                                                    transform: `rotate(${rot}deg)`,
+                                                    transformOrigin: '50% 50%',
+                                                }}
+                                            >
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    left: 0, right: 0, top: 0, bottom: 0,
+                                                    backgroundColor: '#34d399',
+                                                    borderRadius: 1,
+                                                    boxShadow: '0 0 8px #34d399',
+                                                }} />
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    width: 4, height: 4,
+                                                    borderRadius: '50%',
+                                                    backgroundColor: '#fff',
+                                                    top: 1,
+                                                    left: '50%',
+                                                    transform: 'translateX(-50%)',
+                                                }} />
+                                            </div>
+                                        );
+                                    })()}
+
+                                    {/* Cursor ghost — amber directional indicator showing rotation before click */}
+                                    {onPlacementClick && cursorCoords && boardInfo && (() => {
+                                        const { px, py } = gerberToPixel(cursorCoords.x, cursorCoords.y, boardInfo.viewBox);
+                                        return (
+                                            <div
+                                                className="absolute pointer-events-none z-[220]"
+                                                style={{
+                                                    left: px - GHOST_W / 2,
+                                                    top: py - GHOST_H / 2,
+                                                    width: GHOST_W,
+                                                    height: GHOST_H,
+                                                    transform: `rotate(${placingRotation}deg)`,
+                                                    transformOrigin: '50% 50%',
+                                                }}
+                                            >
+                                                {/* Body */}
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    inset: 0,
+                                                    border: '2px solid #fbbf24',
+                                                    backgroundColor: 'rgba(251,191,36,0.18)',
+                                                    borderRadius: 3,
+                                                    boxShadow: '0 0 8px rgba(251,191,36,0.5)',
+                                                }} />
+                                                {/* Pin-1 dot */}
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    width: 4, height: 4,
+                                                    borderRadius: '50%',
+                                                    backgroundColor: '#fbbf24',
+                                                    boxShadow: '0 0 4px #fbbf24',
+                                                    top: -6,
+                                                    left: '50%',
+                                                    transform: 'translateX(-50%)',
+                                                }} />
+                                                {/* Direction arrow */}
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    width: 0, height: 0,
+                                                    borderLeft: '4px solid transparent',
+                                                    borderRight: '4px solid transparent',
+                                                    borderTop: '6px solid #fbbf24',
+                                                    bottom: -7,
+                                                    left: '50%',
+                                                    transform: 'translateX(-50%)',
+                                                }} />
+                                            </div>
+                                        );
+                                    })()}
 
                                     <style>{`
                                         @keyframes pulse {
@@ -221,7 +329,6 @@ const GerberViewer = ({ layers, boardInfo, isFlipped, onPlacementClick, onToggle
                                         }
                                     `}</style>
 
-
                                     {/* Visual Origin Marker (Axes) */}
                                     {boardInfo && (
                                         <svg
@@ -230,12 +337,9 @@ const GerberViewer = ({ layers, boardInfo, isFlipped, onPlacementClick, onToggle
                                             style={{ zIndex: 1000 }}
                                         >
                                             <g transform={`translate(0, ${boardInfo.viewBox[3] + 2 * boardInfo.viewBox[1]}) scale(1, -1)`}>
-                                                {/* X Axis */}
                                                 <line x1="-10000" y1="0" x2="10000" y2="0" stroke="rgba(59, 130, 246, 0.5)" strokeWidth="2" strokeDasharray="10,10" />
-                                                {/* Y Axis */}
                                                 <line x1="0" y1="-10000" x2="0" y2="10000" stroke="rgba(59, 130, 246, 0.5)" strokeWidth="2" strokeDasharray="10,10" />
-                                                {/* Origin Dot */}
-                                                <circle cx="0" cy="0" r="10" fill="#3b82f6" shadow="0 0 10px #3b82f6" />
+                                                <circle cx="0" cy="0" r="10" fill="#3b82f6" />
                                                 <text x="15" y="-15" fill="#3b82f6" fontSize="40" fontWeight="bold" transform="scale(1, -1)">ORIGIN (0,0)</text>
                                             </g>
                                         </svg>
@@ -244,15 +348,13 @@ const GerberViewer = ({ layers, boardInfo, isFlipped, onPlacementClick, onToggle
                                     {/* Dynamic spacer for board size */}
                                     <div style={{ width: boardWidth, height: boardHeight }} />
                                 </div>
-
                             </TransformComponent>
                         </>
                     )}
                 </TransformWrapper>
 
-
                 {/* Live Coordinates HUD */}
-                <div className="absolute bottom-4 left-4 text-xs font-mono bg-slate-900/80 backdrop-blur border border-slate-700 px-3 py-1.5 rounded-lg z-10 flex items-center gap-3 text-slate-300 shadow-lg transition-opacity duration-200">
+                <div className="absolute bottom-4 left-4 text-xs font-mono bg-slate-900/80 backdrop-blur border border-slate-700 px-3 py-1.5 rounded-lg z-10 flex items-center gap-3 text-slate-300 shadow-lg">
                     {cursorCoords ? (
                         <>
                             <div className="flex gap-1">
@@ -264,6 +366,12 @@ const GerberViewer = ({ layers, boardInfo, isFlipped, onPlacementClick, onToggle
                                 <span className="text-blue-400 font-bold min-w-[3rem]">{formatCoord(cursorCoords.y)}</span>
                             </div>
                             <span className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">{displayUnits}</span>
+                            {onPlacementClick && (
+                                <>
+                                    <span className="text-slate-700">|</span>
+                                    <span className="text-amber-400 font-bold">{placingRotation}°</span>
+                                </>
+                            )}
                         </>
                     ) : (
                         <span className="text-slate-500 italic">Hover board for coords</span>
