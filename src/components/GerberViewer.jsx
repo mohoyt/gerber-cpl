@@ -50,33 +50,43 @@ const GerberViewer = ({
 
     const visibleLayers = layers.filter(l => l.visible);
 
-    const getGerberCoords = (e, svgElement) => {
+    const getGerberCoords = (e) => {
         if (!boardInfo) return null;
-        const point = svgElement.createSVGPoint();
-        point.x = e.clientX;
-        point.y = e.clientY;
-        const svgPoint = point.matrixTransform(svgElement.getScreenCTM().inverse());
-        const [, minY, , height] = boardInfo.viewBox;
+        const rect = e.currentTarget.getBoundingClientRect();
+
+        // The currentTarget is the div wrapper, which is scaled by react-zoom-pan-pinch.
+        // rect width/height represents the on-screen size including the zoom scale.
+        // We know its intrinsic (unscaled) size is boardWidth x boardHeight.
+        const boardWidthPx = boardInfo.width * 100;
+        const boardHeightPx = boardInfo.height * 100;
+
+        const scaleX = rect.width / boardWidthPx;
+        const scaleY = rect.height / boardHeightPx;
+
+        const unscaledPx = (e.clientX - rect.left) / scaleX;
+        const unscaledPy = (e.clientY - rect.top) / scaleY;
+
+        const [minX, minY, , height] = boardInfo.viewBox;
         const yTranslate = height + 2 * minY;
-        return {
-            x: svgPoint.x / 1000,
-            y: (yTranslate - svgPoint.y) / 1000,
-        };
+
+        // Invert the gerberToPixel matching exactly
+        // px = (x * 1000 - minX) / 10 => x = (px * 10 + minX) / 1000
+        const x = (unscaledPx * 10 + minX) / 1000;
+        // py = (yTranslate - y * 1000 - minY) / 10 => y = (yTranslate - py * 10 - minY) / 1000
+        const y = (yTranslate - unscaledPy * 10 - minY) / 1000;
+
+        return { x, y };
     };
 
     const handleMouseMove = (e) => {
         if (!boardInfo) return;
-        const svgElement = e.currentTarget.querySelector('svg');
-        if (!svgElement) return;
-        const coords = getGerberCoords(e, svgElement);
+        const coords = getGerberCoords(e);
         if (coords) setCursorCoords(coords);
     };
 
     const handleBoardClick = (e) => {
         if (!onPlacementClick || !boardInfo) return;
-        const svgElement = e.currentTarget.querySelector('svg');
-        if (!svgElement) return;
-        const coords = getGerberCoords(e, svgElement);
+        const coords = getGerberCoords(e);
         if (coords) onPlacementClick(coords);
     };
 
